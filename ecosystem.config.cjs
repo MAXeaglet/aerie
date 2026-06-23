@@ -1,6 +1,6 @@
 module.exports = {
   apps: [{
-    name: 'warpgate-mcp',
+    name: 'aerie',
     script: 'node',
     args: 'dist/index.js',
     cwd: __dirname,

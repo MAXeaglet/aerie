@@ -1,4 +1,4 @@
-# Warpgate-MCP
+# Aerie — Warpgate-MCP
 
 ## OVERVIEW
 MCP 服务器（HTTP SSE 传输），通过 Warpgate 堡垒机的 SQLite 数据库管理 SSH 目标、执行远程命令、传输文件、采集性能指标。
@@ -83,7 +83,7 @@ npx tsc --noEmit        # 类型检查
 
 ## NOTES
 - 监听 `127.0.0.1:3100`（仅本地），需 SSH 隧道或 OpenResty 反代暴露公网
-- 部署地: `/opt/warpgate-mcp/` on `101.47.19.193`，PM2 管理
+- 部署地: `/opt/aerie/` on `101.47.19.193`，PM2 管理
 - Warpgate DB 路径: `/opt/warpgate/data/db/db.sqlite3`
 - 配置文件: `~/.warpgate-mcp/config.json` (首次自动生成)
 - PM2 日志 `~` 不展开 — 注意路径
