@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, renameSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
@@ -54,7 +54,11 @@ export function loadConfig(): Config {
 export function saveConfig(partial: Partial<Config>): Config {
   const current = loadConfig();
   const updated = { ...current, ...partial };
-  writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2));
+  // 原子写入：先写临时文件再 rename，防止写一半断电损坏配置
+  const tmpPath = CONFIG_PATH + '.tmp.' + randomUUID().slice(0, 8);
+  writeFileSync(tmpPath, JSON.stringify(updated, null, 2));
+  try { chmodSync(tmpPath, 0o600); } catch { /* Windows 可能不支持 chmod */ }
+  renameSync(tmpPath, CONFIG_PATH);
   return updated;
 }
 
@@ -67,7 +71,7 @@ function envOverrides(): Partial<Config> {
     ...(process.env.WPG_DB_PATH ? { warpgateDbPath: process.env.WPG_DB_PATH } : {}),
     ...(process.env.WPG_SSH_KEY ? { sshKeyPath: process.env.WPG_SSH_KEY } : {}),
     ...(process.env.WPG_METRICS_DB ? { metricsDbPath: process.env.WPG_METRICS_DB } : {}),
-    ...(process.env.WPG_PORT ? { listenPort: parseInt(process.env.WPG_PORT, 10) } : {}),
+    ...(process.env.WPG_PORT ? { listenPort: parseInt(process.env.WPG_PORT, 10) || 3100 } : {}),
     ...(process.env.WPG_HOST ? { listenHost: process.env.WPG_HOST } : {}),
     ...(process.env.WPG_AUTH_TOKEN ? { authToken: process.env.WPG_AUTH_TOKEN } : {}),
     ...(process.env.WPG_LOG_LEVEL ? { logLevel: process.env.WPG_LOG_LEVEL as Config['logLevel'] } : {}),

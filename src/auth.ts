@@ -1,3 +1,4 @@
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import type { Config } from './config.js';
 import { TOOL_META } from './tool-meta.js';
@@ -5,16 +6,62 @@ import { TOOL_META } from './tool-meta.js';
 // SSE endpoint 白名单 — 这些路径绕过 token 检查（SDK 内部协商需要）
 const SSE_WHITELIST = ['/sse', '/message'];
 
+// Dashboard 白名单 — 精确匹配路径列表
+const DASHBOARD_WHITELIST = ['/', '/api/auth/login', '/api/auth/logout'];
+// Dashboard 前缀白名单 — 这些前缀开头的路径允许未认证访问
+const DASHBOARD_WHITELIST_PREFIX = ['/dashboard/'];
+
 let currentConfig: Config | null = null;
+
+// ─── Dashboard Session Store ─────────────────────────────
+const sessions = new Map<string, { createdAt: number }>();
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+// Clean up expired sessions every hour
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (now - session.createdAt > SESSION_TTL_MS) sessions.delete(id);
+  }
+}, 3600_000).unref();
+
+function createSession(): string {
+  const id = randomUUID();
+  sessions.set(id, { createdAt: Date.now() });
+  return id;
+}
+
+function validateSession(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    sessions.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
+function destroySession(sessionId: string): void {
+  sessions.delete(sessionId);
+}
 
 export function setAuthConfig(config: Config): void {
   currentConfig = config;
 }
 
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
+
 /** 校验 MCP SSE 连接 token（查询参数方式） */
 export function validateMcpToken(token: string | undefined): boolean {
   if (!currentConfig || !token) return false;
-  return token === currentConfig.authToken;
+  return safeCompare(token, currentConfig.authToken);
 }
 
 /** 运行时判断工具是否标记为 sensitive（I-01 RBAC 门禁） */
@@ -71,6 +118,22 @@ export function authMiddleware(config: Config) {
       next();
       return;
     }
+    // Dashboard 白名单（先精确匹配，再前缀匹配）
+    if (DASHBOARD_WHITELIST.includes(req.path) || DASHBOARD_WHITELIST_PREFIX.some(p => req.path.startsWith(p))) {
+      next();
+      return;
+    }
+
+    // Session cookie check (for dashboard API calls)
+    const sessionCookie = req.headers.cookie
+      ?.split(';')
+      .map(c => c.trim())
+      .find(c => c.startsWith('aerie_session='))
+      ?.split('=')[1];
+    if (sessionCookie && validateSession(sessionCookie)) {
+      next();
+      return;
+    }
 
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -82,13 +145,41 @@ export function authMiddleware(config: Config) {
       ? authHeader.slice(7)
       : authHeader;
 
-    if (token !== config.authToken) {
+    if (!safeCompare(token, config.authToken)) {
       res.status(401).json({ error: 'Invalid auth token' });
       return;
     }
 
     next();
   };
+}
+
+// ─── Dashboard Auth Handlers ─────────────────────────────
+
+export function loginHandler(req: Request, res: Response): void {
+  const { token } = req.body || {};
+  if (!token || !currentConfig) {
+    res.status(401).json({ error: 'Missing token' });
+    return;
+  }
+  if (!safeCompare(token, currentConfig.authToken)) {
+    res.status(401).json({ error: 'Invalid auth token' });
+    return;
+  }
+  const sessionId = createSession();
+  res.setHeader('Set-Cookie', `aerie_session=${sessionId}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+  res.json({ success: true });
+}
+
+export function logoutHandler(_req: Request, res: Response): void {
+  const sessionCookie = _req.headers.cookie
+    ?.split(';')
+    .map(c => c.trim())
+    .find(c => c.startsWith('aerie_session='))
+    ?.split('=')[1];
+  if (sessionCookie) destroySession(sessionCookie);
+  res.setHeader('Set-Cookie', 'aerie_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+  res.json({ success: true });
 }
 
 // ─── RBAC 审计格式化 ────────────────────────────────────
