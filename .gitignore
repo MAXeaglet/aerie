@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.db
+config.json
+.env
+logs/
+*.log
+.omo/boulder.json
+.omo/run-continuation/
+.omo/*.tar.gz
+.opencode-file-saver-debug.log
