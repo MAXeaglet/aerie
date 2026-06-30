@@ -88,7 +88,7 @@ try {
 
 // 6. MCP Server 实例
 const server = new Server(
-  { name: 'warpgate-mcp', version: '0.1.0' },
+  { name: 'aerie', version: '0.1.0' },
   { capabilities: { tools: {} } },
 );
 
@@ -249,7 +249,7 @@ function startServer() {
         metricsDb: config.metricsDbPath,
         uptime: 0,
       });
-      logger.info(`warpgate-mcp v0.1.0 listening on ${config.listenHost}:${config.listenPort} (HTTPS)`);
+      logger.info(`aerie v0.1.0 listening on ${config.listenHost}:${config.listenPort} (HTTPS)`);
     });
   } else {
     createHttpServer(app).listen(config.listenPort, config.listenHost, () => {
@@ -262,7 +262,7 @@ function startServer() {
         metricsDb: config.metricsDbPath,
         uptime: 0,
       });
-      logger.info(`warpgate-mcp v0.1.0 listening on ${config.listenHost}:${config.listenPort}`);
+      logger.info(`aerie v0.1.0 listening on ${config.listenHost}:${config.listenPort}`);
     });
   }
 }

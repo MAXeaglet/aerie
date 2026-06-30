@@ -1,7 +1,7 @@
 {
-  "name": "warpgate-mcp",
+  "name": "aerie",
   "version": "1.0.0",
-  "description": "Warpgate Server Management MCP",
+  "description": "Warpgate Server Management MCP — Aerie",
   "type": "module",
   "scripts": {
     "build": "tsc",
