@@ -27,14 +27,19 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
   router.get('/api/status', async (_req, res) => {
     try {
       const s = deps.stats.getStats();
-      let health: any = { status: 'healthy', uptime_seconds: 0 };
+      let health: any = { status: 'healthy', uptime_seconds: 0, stats: {} };
       if (deps.warpgateDb) {
         health = await handleDepsCheck(deps.config, deps.warpgateDb, s.startTime, s);
         health = JSON.parse(health.content[0].text);
       }
+      // Merge so targets_count from health is preserved alongside live counters
       res.json({
         ...health,
-        stats: { total_requests: s.callsTotal, failed_requests: s.callsFailed },
+        stats: {
+          ...health.stats,
+          total_requests: s.callsTotal,
+          failed_requests: s.callsFailed,
+        },
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -64,11 +69,11 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
   });
 
   router.get('/api/targets/:name', (req, res) => {
-    if (!deps.warpgateWriteDb) {
+    if (!deps.warpgateDb) {
       res.status(503).json({ error: 'Warpgate DB not available' });
       return;
     }
-    handleGetTarget(deps.warpgateWriteDb as any, { name: req.params.name })
+    handleGetTarget(deps.warpgateDb as any, { name: req.params.name })
       .then(result => {
         const data = JSON.parse(result.content[0].text);
         if (result.isError) { res.status(404).json(data); return; }
@@ -111,8 +116,10 @@ export function createDashboardRouter(deps: DashboardDeps): Router {
       return;
     }
     try {
+      // ASC order: oldest → newest. Front-end treats last element as latest
+      // and draws the chart left-to-right.
       const rows = deps.metricsDb.prepare(
-        'SELECT * FROM stats_history WHERE target_name = ? ORDER BY collected_at DESC LIMIT 60'
+        'SELECT * FROM stats_history WHERE target_name = ? ORDER BY collected_at ASC LIMIT 60'
       ).all(_req.params.name);
       res.json(rows);
     } catch (err) {
