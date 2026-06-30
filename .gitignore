@@ -9,3 +9,4 @@ logs/
 .omo/run-continuation/
 .omo/*.tar.gz
 .opencode-file-saver-debug.log
+AGENTS.md
