@@ -67,14 +67,52 @@ describe('Dashboard REST API', () => {
   it('POST /api/alerts creates and returns a rule', async () => {
     const res = await request(app)
       .post('/api/alerts')
-      .send({ name: 'test', targetName: 'srv1', metric: 'cpuPercent', operator: 'gt', threshold: 90 });
+      .send({ name: 'test', targetName: 'srv1', metric: 'cpu_percent', operator: 'gt', threshold: 90 });
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('id');
     expect(res.body.name).toBe('test');
+    expect(res.body.metric).toBe('cpu_percent');
+  });
+
+  it('POST /api/alerts rejects invalid metric (camelCase no longer accepted)', async () => {
+    const res = await request(app)
+      .post('/api/alerts')
+      .send({ name: 'bad', targetName: 'srv1', metric: 'cpuPercent', operator: 'gt', threshold: 90 });
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('error');
   });
 
   it('DELETE /api/alerts/:id returns 404 for unknown id', async () => {
     const res = await request(app).delete('/api/alerts/nonexistent');
     expect(res.status).toBe(404);
+  });
+
+  it('GET /api/targets/:name/stats returns oldest→newest (ASC)', async () => {
+    // Insert two snapshots out of order by collected_at
+    const db = (createMockDeps() as any).metricsDb;
+    const later = '2026-06-30T10:00:00Z';
+    const earlier = '2026-06-30T09:00:00Z';
+    db.prepare(
+      'INSERT INTO stats_history (id, target_name, collected_at, cpu_percent, mem_percent, disk_percent, load_1m, uptime_seconds) VALUES (?,?,?,?,?,?,?,?)'
+    ).run('1', 'srv1', later, 50, 50, 50, 1, 100);
+    db.prepare(
+      'INSERT INTO stats_history (id, target_name, collected_at, cpu_percent, mem_percent, disk_percent, load_1m, uptime_seconds) VALUES (?,?,?,?,?,?,?,?)'
+    ).run('2', 'srv1', earlier, 10, 10, 10, 1, 100);
+
+    // Use an app wired to the same in-memory db is hard; instead re-create router with this db
+    const app2 = express();
+    app2.use(express.json());
+    app2.use(createDashboardRouter({
+      warpgateDb: null, warpgateWriteDb: null, metricsDb: db,
+      config: { listenPort: 3100, listenHost: '127.0.0.1', authToken: 't' } as any,
+      stats: createStats(),
+      sshExec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    }));
+    const res = await request(app2).get('/api/targets/srv1/stats');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(2);
+    expect(res.body[0].collected_at).toBe(earlier);
+    expect(res.body[1].collected_at).toBe(later);
   });
 });

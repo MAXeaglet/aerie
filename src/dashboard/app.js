@@ -46,6 +46,81 @@ function toast(msg, type = 'success') {
 }
 
 /* =============================================
+   Onboarding Guide
+   ============================================= */
+function showOnboarding() {
+  const existing = $('#onboarding-overlay');
+  if (existing) existing.remove();
+
+  const steps = [
+    { icon: '\u{1F680}', title: 'Welcome to Aerie', body: 'Aerie is the management dashboard for your Warpgate MCP server. Monitor SSH targets, track performance, and review audit logs\u2014all in one place.' },
+    { icon: '\u{1F511}', title: 'Authentication', body: 'You need an API token to access the dashboard. Generate one from your Warpgate configuration file, or ask your administrator for the token.' },
+    { icon: '\u{1F4CA}', title: 'Key Features', body: '\u2022 <b>Targets</b> \u2014 View and monitor your SSH targets<br>\u2022 <b>Performance</b> \u2014 Real-time CPU, memory &amp; disk charts<br>\u2022 <b>Audit Log</b> \u2014 Review all tool invocations<br>\u2022 <b>Alerts</b> \u2014 Set threshold-based alerting rules' },
+  ];
+
+  let currentStep = 0;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'onboarding-overlay';
+  overlay.className = 'onboarding-overlay';
+  overlay.innerHTML = `
+    <div class="onboarding-modal">
+      <div class="onboarding-steps">
+        ${steps.map((s, i) => `<div class="onboarding-dot ${i === 0 ? 'active' : ''}" data-step="${i}"></div>`).join('')}
+      </div>
+      <div class="onboarding-content" id="onboarding-content">
+        <div class="onboarding-icon">${steps[0].icon}</div>
+        <h2 class="onboarding-title">${steps[0].title}</h2>
+        <p class="onboarding-body">${steps[0].body}</p>
+      </div>
+      <div class="onboarding-actions">
+        <button class="btn btn-secondary" id="onboarding-skip">Skip</button>
+        <button class="btn btn-primary" id="onboarding-next">Next \u2192</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const content = $('#onboarding-content');
+  const dots = $$('.onboarding-dot');
+  const nextBtn = $('#onboarding-next');
+  const skipBtn = $('#onboarding-skip');
+
+  function renderStep(idx) {
+    currentStep = idx;
+    const s = steps[idx];
+    html(content, `
+      <div class="onboarding-icon">${s.icon}</div>
+      <h2 class="onboarding-title">${s.title}</h2>
+      <p class="onboarding-body">${s.body}</p>
+    `);
+    dots.forEach((dot, i) => dot.classList.toggle('active', i === idx));
+    nextBtn.textContent = idx === steps.length - 1 ? 'Get Started \u2192' : 'Next \u2192';
+  }
+
+  nextBtn.onclick = () => {
+    if (currentStep < steps.length - 1) {
+      renderStep(currentStep + 1);
+    } else {
+      localStorage.setItem('aerie_onboarded', '1');
+      overlay.remove();
+    }
+  };
+
+  skipBtn.onclick = () => {
+    localStorage.setItem('aerie_onboarded', '1');
+    overlay.remove();
+  };
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      localStorage.setItem('aerie_onboarded', '1');
+      overlay.remove();
+    }
+  });
+}
+
+/* =============================================
    API helper
    ============================================= */
 async function api(method, path, body = null) {
@@ -276,6 +351,7 @@ function renderSidebar() {
       `).join('')}
     </nav>
     <div class="sidebar-footer">
+      <button class="btn-help-sidebar" onclick="showOnboarding()" title="Guide">?</button>
       <button class="btn-logout" onclick="handleLogout()">
         <span class="nav-icon">\u2192</span>
         Logout
@@ -288,6 +364,70 @@ async function handleLogout() {
   try { await api('POST', '/api/auth/logout'); } catch (_) {}
   state.authenticated = false;
   navigate('#login');
+}
+
+/* =============================================
+   Page — Setup (first install)
+   ============================================= */
+route('setup', async () => {
+  html($('#app'), `
+    <div class="login-wrapper">
+      <div class="login-card" style="max-width:420px;">
+        <div class="login-logo">
+          <div class="logo-icon">AE</div>
+          <h1>Welcome to Aerie</h1>
+          <p>Warpgate MCP Server — First-time setup</p>
+        </div>
+        <p style="font-size:14px;color:var(--text-secondary);margin-bottom:20px;line-height:1.6;text-align:center;">
+          Create your admin API token. This token is used for both dashboard login and MCP client authentication.
+          Save it somewhere safe — if you forget it, you'll need CLI access to reset.
+        </p>
+        <div class="form-group">
+          <label for="setup-token">API Token</label>
+          <input type="text" id="setup-token" class="form-input"
+                 placeholder="e.g. my-secret-aerie-token" autocomplete="off"
+                 style="font-family:var(--font-mono, monospace);">
+          <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">At least 8 characters. Use a strong, random value.</p>
+        </div>
+        <button class="btn btn-primary" id="setup-btn" onclick="setupInit()" style="width:100%;margin-top:8px;">
+          Initialize Dashboard &rarr;
+        </button>
+        <div class="login-error alert alert-error" id="setup-error"></div>
+      </div>
+    </div>
+  `);
+  $('#setup-token').focus();
+});
+
+async function setupInit() {
+  const token = $('#setup-token').value.trim();
+  const btn = $('#setup-btn');
+  const errEl = $('#setup-error');
+  if (!token || token.length < 8) {
+    errEl.textContent = 'Token must be at least 8 characters.';
+    errEl.classList.add('visible');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Initializing...';
+  errEl.classList.remove('visible');
+
+  try {
+    await api('POST', '/api/setup/init', { token });
+    // On success, auto-login via login endpoint
+    try {
+      await api('POST', '/api/auth/login', { token });
+    } catch (_) { /* auto-login best-effort */ }
+    state.authenticated = true;
+    window.location.replace('#overview');
+  } catch (e) {
+    const msg = e.data?.error || e.message || 'Setup failed';
+    errEl.textContent = msg;
+    errEl.classList.add('visible');
+    btn.disabled = false;
+    btn.innerHTML = 'Initialize Dashboard &rarr;';
+  }
 }
 
 /* =============================================
@@ -307,9 +447,12 @@ route('login', async () => {
           <input type="password" id="login-token" class="form-input"
                  placeholder="Enter your API token" autocomplete="off">
         </div>
-        <button class="btn btn-primary" id="login-btn" onclick="handleLogin()">
-          \u2192 Login
-        </button>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+          <button class="btn btn-primary" id="login-btn" onclick="handleLogin()" style="flex:1;">
+            \u2192 Login
+          </button>
+          <button class="btn btn-help" id="login-help-btn" onclick="showOnboarding()" title="What is Aerie?">?</button>
+        </div>
         <div class="login-error alert alert-error" id="login-error"></div>
       </div>
     </div>
@@ -486,7 +629,7 @@ async function loadTargets() {
                 <td>${renderHealthStatus(t.health)}</td>
                 <td class="mono">${t.health?.latency_ms != null ? t.health.latency_ms + 'ms' : '--'}</td>
                 <td style="text-align:right;">
-                  <button class="btn btn-xs btn-secondary" onclick="checkTargetHealth('${escHtml(t.name)}', this)">\u2691 Check Health</button>
+                  <button class="btn btn-xs btn-secondary" onclick="checkTargetHealth('${escAttr(t.name)}', this)">\u2691 Check Health</button>
                 </td>
               </tr>
             `).join('')}
@@ -537,8 +680,8 @@ route('performance/:name', async (params) => {
         <p class="page-subtitle">Performance metrics &amp; statistics</p>
       </div>
       <div class="section-actions">
-        <button class="btn btn-primary btn-sm" id="collect-btn" onclick="collectStats('${escHtml(name)}')">\u2316 Collect Now</button>
-        <button class="btn btn-secondary btn-sm" onclick="loadPerformance('${escHtml(name)}')">\u21bb Refresh</button>
+        <button class="btn btn-primary btn-sm" id="collect-btn" onclick="collectStats('${escAttr(name)}')">\u2316 Collect Now</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadPerformance('${escAttr(name)}')">\u21bb Refresh</button>
       </div>
     </div>
     <div class="status-cards" id="perf-cards">
@@ -966,6 +1109,18 @@ function escHtml(str) {
   return d.innerHTML;
 }
 
+// Escape for use inside onclick="fn('...')" — single quote + backslash + HTML
+function escAttr(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function formatTime(ts) {
   if (!ts) return '--';
   const d = new Date(ts);
@@ -1017,6 +1172,9 @@ function handleResize() {
 /* =============================================
    Init
    ============================================= */
+// Routes that bypass auth (first-install + login)
+const PUBLIC_HASHES = new Set(['#login', '#setup']);
+
 async function init() {
   // Build the fixed layout
   document.body.innerHTML = `
@@ -1033,16 +1191,6 @@ async function init() {
   `;
   window.addEventListener('resize', handleResize);
 
-  // Check for session on load
-  try {
-    await api('GET', '/api/status');
-    state.authenticated = true;
-  } catch (e) {
-    state.authenticated = false;
-  }
-
-  renderSidebar();
-
   // Show mobile header on small screens
   const checkMobile = () => {
     const mh = $('#mobile-header');
@@ -1051,7 +1199,7 @@ async function init() {
   checkMobile();
   window.addEventListener('resize', checkMobile);
 
-  // Route handler
+  // Route handler — registered BEFORE setup detection so #setup can navigate
   async function onHashChange() {
     clearAllIntervals();
     const hash = window.location.hash || '#overview';
@@ -1063,7 +1211,7 @@ async function init() {
     state.route = hash.slice(1);
     state.params = match.params;
 
-    if (!state.authenticated && hash !== '#login') {
+    if (!state.authenticated && !PUBLIC_HASHES.has(hash)) {
       navigate('#login');
       return;
     }
@@ -1071,14 +1219,41 @@ async function init() {
     renderSidebar();
     await match.fn(state.params);
   }
-
   window.addEventListener('hashchange', onHashChange);
+
+  // First-install detection — must come after hashchange listener is registered
+  try {
+    const setupStatus = await fetch('/api/setup/status').then(r => r.json());
+    if (!setupStatus.configured) {
+      state.authenticated = false;
+      renderSidebar();
+      navigate('#setup');
+      return;
+    }
+  } catch (_) { /* ignore - old server without setup endpoint */ }
+
+  // Check for session on load
+  try {
+    await api('GET', '/api/status');
+    state.authenticated = true;
+  } catch (e) {
+    state.authenticated = false;
+  }
+
+  // First-visit onboarding (only when unauthenticated)
+  if (!state.authenticated && !localStorage.getItem('aerie_onboarded')) {
+    setTimeout(showOnboarding, 300);
+  }
+
+  renderSidebar();
   onHashChange();
 }
 
 window.navigate = navigate;
 window.handleLogin = handleLogin;
 window.handleLogout = handleLogout;
+window.showOnboarding = showOnboarding;
+window.setupInit = setupInit;
 window.loadTargets = loadTargets;
 window.checkTargetHealth = checkTargetHealth;
 window.loadPerformance = loadPerformance;

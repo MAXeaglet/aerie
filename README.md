@@ -4,6 +4,8 @@
 
 **Aerie** 将 Warpgate 堡垒机的 SSH 目标管理能力包装为标准 MCP（Model Context Protocol）工具，使 AI 客户端（如 Claude、OpenCode）能通过 Warpgate 安全地管理远程服务器。
 
+> 📚 **深入理解项目?** 阅读 [架构文档](docs/ARCHITECTURE.md) —— 分层可展开,含核心机制原理、扩展指南、真实 bug 复盘。
+
 ---
 
 ## 快速开始
@@ -58,10 +60,10 @@ npm run build
 | `WPG_TLS_CERT_PATH` | TLS 证书路径（可选，启用 HTTPS） |
 | `WPG_TLS_KEY_PATH` | TLS 私钥路径（可选，启用 HTTPS） |
 
-### 启动
+### 启动与首次安装
 
 ```bash
-# 开发模式
+# 开发模式(热重载)
 npm run dev
 
 # 生产模式
@@ -70,6 +72,17 @@ npm run build && npm start
 # PM2 部署
 pm2 start ecosystem.config.cjs
 ```
+
+**首次安装(Setup):**
+
+服务首次启动时,若未检测到认证 token,会进入 setup 模式:
+
+1. 浏览器访问 `http://127.0.0.1:3100`
+2. 自动跳转到 setup 页面,设置 Bearer token(≥8 字符)
+3. 设置完成后自动登录,Dashboard 可用
+4. MCP 客户端用该 token 连接 `/sse?token=xxx`
+
+Setup 完成后 token 存入 Secret Store(OS Keyring 或加密文件),不落 `config.json` 明文。
 
 ### MCP 客户端配置
 
@@ -104,15 +117,12 @@ pm2 start ecosystem.config.cjs
 
 | 工具 | 说明 | 权限 |
 |---|---|---|
-| `warpgate_exec` | 在目标服务器上执行命令或脚本。支持单条命令和 heredoc 多行脚本。内置 **42 条安全黑名单**，对危险命令自动拦截 | 写入 |
+| `warpgate_exec` | 在目标服务器上执行命令或脚本。支持单条命令和 heredoc 多行脚本。内置 **28 条安全黑名单**，对危险命令分级处置 | 写入 |
 
-**安全拦截清单（部分）：**
-- `rm -rf /`、`dd if=`、fork 炸弹 — **直接拦截**
-- `sudo`、`shred`、`chattr` — **直接拦截**
-- `curl`、`wget -o`、`nc`、`telnet`、`ssh`、`scp`、`rsync` — **出站网络全拦截**
-- `python3 -c`、`perl`、`ruby` — **内联脚本执行拦截**
-- 管道到 shell、反引号执行 — **拦截**
-- 读取 `/etc/shadow`、`/etc/passwd` 等敏感文件 — **拦截**
+**安全拦截机制:**
+- **blocked 级**(直接拦截):`rm -rf /` `dd if=` `mkfs.` `sudo` `curl` `nc` `\| bash` fork 炸弹 等
+- **warned 级**(放行但标记警告):`sed -i` `systemctl` `useradd` `passwd` 等
+- **四级风险评估**(用于审计):critical / high / medium / low
 
 所有命令执行均写入审计日志，记录目标、命令、退出码、耗时、风险等级。
 
@@ -133,7 +143,7 @@ pm2 start ecosystem.config.cjs
 |---|---|---|
 | `warpgate_stats` | 采集目标服务器的实时性能快照（CPU / MEM / DISK / NET / LOAD / UPTIME），数据写入 metrics 数据库 | 只读 |
 | `warpgate_alert_list` | 列出所有告警规则 | 只读 |
-| `warpgate_alert_create` | 创建告警规则（支持 cpuPercent / memPercent / diskPercent / load1m 指标） | 写入 |
+| `warpgate_alert_create` | 创建告警规则（支持 `cpu_percent` / `mem_percent` / `disk_percent` / `load_1m` 指标,snake_case 命名） | 写入 |
 | `warpgate_alert_delete` | 删除告警规则 | 写入 |
 
 ### 审计日志
@@ -192,12 +202,14 @@ pm2 start ecosystem.config.cjs
 
 ### 安全设计
 
-- **双层认证**：Express 层 Bearer Token + MCP SSE `?token` 参数
-- **令牌桶限流**：60 req/min，按 IP 隔离
+- **双层认证**：Express Bearer Token + MCP SSE `?token` 参数,Dashboard Cookie Session
+- **Setup 实时生效**：首次安装设置 token 后无需重启,`currentConfig` 实时同步
+- **令牌桶限流**：60 req/min，按 IP 隔离(反代需 `trust proxy`)
 - **敏感操作审计**：目标管理工具标记为 `sensitive`，自动记录审计日志
-- **命令黑名单**：42 条正则 + 三级风险等级（blocked / warned / 分级拦截）
-- **路径防御**：禁止 `..` 遍历，上传路径限定白名单目录
+- **命令黑名单**：28 条正则 + 两级处置(blocked/warned) + 四级风险评估
+- **路径防御**：禁止 `..` 遗传,上传路径限定白名单目录
 - **文件锁**：相同远程文件的并发编辑自动排队
+- **Token 安全存储**：Secret Store(OS Keyring 或 AES-256-GCM 加密),不落 config.json
 - **RBAC 预备**：`tool-meta.ts` 定义工具分类和敏感标记，为未来角色权限体系预留
 
 ---

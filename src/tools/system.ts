@@ -20,7 +20,7 @@ export async function handleDepsCheck(
   const health: any = {
     status: 'healthy',
     uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
-    stats: { total_requests: stats.callsTotal, failed_requests: stats.callsFailed },
+    stats: { total_requests: stats.callsTotal, failed_requests: stats.callsFailed, targets_count: 0 },
     checks: {},
   };
 
@@ -33,6 +33,9 @@ export async function handleDepsCheck(
     health.checks.warpgate_db = missing.length === 0
       ? { status: 'ok' }
       : { status: 'degraded', missing_tables: missing };
+    // Count targets for the overview card
+    const row = db.prepare('SELECT COUNT(*) as count FROM targets').get() as { count: number } | undefined;
+    health.stats.targets_count = row?.count ?? 0;
   } catch (err) {
     health.checks.warpgate_db = { status: 'error', message: (err as Error).message };
     health.status = 'degraded';

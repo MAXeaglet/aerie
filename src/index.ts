@@ -4,12 +4,12 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { loadConfig } from './config.js';
+import { loadConfig, isConfigured, saveConfig, resetToken, CONFIG_PATH, migrateTokenFromConfig } from './config.js';
 import type { Config } from './config.js';
 import { createLogger } from './logger.js';
 import type { Logger } from 'pino';
@@ -68,6 +68,20 @@ try {
 } catch (err) {
   process.stderr.write(`FATAL: Failed to create logger: ${(err as Error).message}\n`);
   process.exit(1);
+}
+
+// 2c. 自动迁移旧版 config.json 中的 token 到 SecretStore
+try {
+  if (migrateTokenFromConfig()) {
+    logger.info({ event: 'token.migrated', from: 'config.json', to: 'SecretStore' });
+  }
+  } catch {}
+
+// 2b. 检查是否首次安装
+const configured = isConfigured();
+if (!configured) {
+  console.log('=== Aerie Setup Mode ===');
+  console.log('No config found. Open http://localhost:' + config.listenPort + ' in your browser to complete setup.');
 }
 
 // 3. createStats (在注册 handler 之前)
@@ -241,6 +255,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // 8. Express app + auth + dashboard
 const app = express();
+// Trust first proxy hop so req.ip reflects the real client when behind Nginx/OpenResty
+app.set('trust proxy', 1);
 const __fname = fileURLToPath(import.meta.url);
 const __dname = dirname(__fname);
 const dashboardDir = __dname.includes('src')
@@ -256,8 +272,31 @@ app.get('/', (_req, res) => {
   res.sendFile(dashboardDir + '/index.html');
 });
 
+// Setup routes — 首次安装跳过认证（在 authMiddleware 之前）
+app.get('/api/setup/status', (_req, res) => {
+  res.json({ configured: isConfigured() });
+});
+
+app.post('/api/setup/init', (req, res) => {
+  const { token } = req.body || {};
+  if (!token || token.length < 8) {
+    res.status(400).json({ error: 'Token must be at least 8 characters' });
+    return;
+  }
+  if (isConfigured()) {
+    res.status(403).json({ error: 'Already configured. Use CLI to reset token.' });
+    return;
+  }
+  // 创建完整配置并设置 token
+  const cfg = saveConfig({ authToken: token });
+  setAuthConfig(cfg);
+  config = cfg;
+  logger.info({ event: 'setup.complete', configured: true });
+  res.json({ success: true, token });
+});
+
 // Auth middleware (whitelisted paths pass through, all others need Bearer or session)
-app.use(authMiddleware(config));
+app.use(authMiddleware());
 
 // Dashboard auth routes (whitelisted)
 app.post('/api/auth/login', loginHandler);
@@ -274,8 +313,8 @@ app.use(createDashboardRouter({
 }));
 
 // 9. HTTP/SSE 传输
+// /sse and /message are in the auth whitelist; /sse validates ?token itself.
 let transport: SSEServerTransport | undefined;
-app.use(authMiddleware(config));
 
 app.get('/sse', async (req, res) => {
   const token = req.query.token as string | undefined;

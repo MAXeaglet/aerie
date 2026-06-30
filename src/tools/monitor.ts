@@ -1,8 +1,23 @@
 import type { Database } from 'better-sqlite3';
+import { z } from 'zod';
 import { exec } from '../ssh.js';
 import { insertStatsSnapshot, listAlertRules, createAlertRule, deleteAlertRule } from '../metrics-db.js';
 import { getTargetByName } from '../db.js';
 import type { StatsSnapshot, TargetInfo } from '../types.js';
+
+// Canonical alert metric names — snake_case to match stats_history columns.
+// Both MCP tool schema and Dashboard must use these exact values.
+export const ALERT_METRICS = ['cpu_percent', 'mem_percent', 'disk_percent', 'load_1m'] as const;
+export type AlertMetric = typeof ALERT_METRICS[number];
+
+const AlertCreateSchema = z.object({
+  name: z.string().min(1),
+  targetName: z.string().min(1),
+  metric: z.enum(ALERT_METRICS),
+  operator: z.enum(['gt', 'lt', 'gte', 'lte', 'eq']),
+  threshold: z.number(),
+  notifyMethod: z.string().optional(),
+});
 
 // ─── warpgate_stats ────────────────────────────────────
 
@@ -148,7 +163,7 @@ export const alertCreateTool = {
     properties: {
       name: { type: 'string' },
       targetName: { type: 'string' },
-      metric: { type: 'string', enum: ['cpuPercent', 'memPercent', 'diskPercent', 'load1m'] },
+      metric: { type: 'string', enum: ALERT_METRICS },
       operator: { type: 'string', enum: ['gt', 'lt', 'gte', 'lte', 'eq'] },
       threshold: { type: 'number' },
       notifyMethod: { type: 'string', description: 'Optional notification method' },
@@ -160,15 +175,22 @@ export const alertCreateTool = {
 export function handleAlertCreate(
   args: { name: string; targetName: string; metric: string; operator: string; threshold: number; notifyMethod?: string },
   db: Database,
-): { content: Array<{ type: string; text: string }> } {
+): { content: Array<{ type: string; text: string }>; isError?: boolean } {
+  const parsed = AlertCreateSchema.safeParse(args);
+  if (!parsed.success) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: 'Invalid alert rule', details: parsed.error.flatten() }) }],
+      isError: true,
+    };
+  }
   const rule = createAlertRule(db, {
-    name: args.name,
-    targetName: args.targetName,
-    metric: args.metric,
-    operator: args.operator as 'gt' | 'lt' | 'gte' | 'lte' | 'eq',
-    threshold: args.threshold,
+    name: parsed.data.name,
+    targetName: parsed.data.targetName,
+    metric: parsed.data.metric,
+    operator: parsed.data.operator,
+    threshold: parsed.data.threshold,
     enabled: true,
-    notifyMethod: args.notifyMethod,
+    notifyMethod: parsed.data.notifyMethod,
   });
   return { content: [{ type: 'text', text: JSON.stringify(rule, null, 2) }] };
 }

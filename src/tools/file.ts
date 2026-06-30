@@ -134,26 +134,28 @@ export async function handleEditFile(
   if (!targetInfo) {
     return { content: [{ type: 'text', text: JSON.stringify({ error: `Target "${args.target}" not found` }) }], isError: true };
   }
-  
+
   let result: { backupPath: string; diff: string } | undefined;
-  
+
   try {
     await withLock(args.path, async () => {
       result = await sshEdit(targetInfo, args.path, args.oldText, args.newText);
     });
-    
-    if (result) {
-      auditLog({
-        id: randomUUID(), timestamp: new Date().toISOString(),
-        tool: 'warpgate_edit_file', target: args.target,
-        command: `edit ${args.path}`,
-        exitCode: 0, durationMs: 0,
-        riskLevel: 'medium', status: 'success',
-        diff: result.diff.slice(0, 2000),
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ backupPath: result.backupPath, diff: result.diff }) }] };
-    }
   } catch (err) {
     return { content: [{ type: 'text', text: JSON.stringify({ error: (err as Error).message }) }], isError: true };
   }
+
+  if (!result) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Edit produced no result' }) }], isError: true };
+  }
+
+  auditLog({
+    id: randomUUID(), timestamp: new Date().toISOString(),
+    tool: 'warpgate_edit_file', target: args.target,
+    command: `edit ${args.path}`,
+    exitCode: 0, durationMs: 0,
+    riskLevel: 'medium', status: 'success',
+    diff: result.diff.slice(0, 2000),
+  });
+  return { content: [{ type: 'text', text: JSON.stringify({ backupPath: result.backupPath, diff: result.diff }) }] };
 }

@@ -4,8 +4,10 @@ import request from 'supertest';
 import { authMiddleware, validateMcpToken, isSensitiveTool, setAuthConfig, createRateLimiter } from './auth.js';
 
 function createTestApp(token: string) {
+  // Mirror production: authMiddleware reads the live currentConfig set via setAuthConfig
+  setAuthConfig({ authToken: token } as any);
   const app = express();
-  app.use(authMiddleware({ authToken: token } as any));
+  app.use(authMiddleware());
   app.get('/test', (req, res) => res.json({ ok: true }));
   app.get('/sse', (req, res) => res.json({ sse: true }));
   app.post('/message', (req, res) => res.json({ message: true }));
