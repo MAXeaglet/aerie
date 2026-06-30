@@ -2,6 +2,11 @@
   "name": "aerie",
   "version": "1.0.0",
   "description": "Warpgate Server Management MCP — Aerie",
+  "author": {
+    "name": "MAXeaglet",
+    "email": "max-eagle@foxmail.com"
+  },
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "aerie": "./dist/cli.js"
