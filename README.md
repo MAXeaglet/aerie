@@ -52,6 +52,9 @@ npm run build
 | `WPG_PORT` | 监听端口 |
 | `WPG_HOST` | 监听地址 |
 | `WPG_LOG_LEVEL` | 日志级别 (`debug`, `info`, `warn`, `error`) |
+| `WPG_METRICS_DB` | Metrics 数据库路径（默认 `~/.warpgate-mcp/metrics.db`） |
+| `WPG_LOG_DIR` | 日志目录路径（默认 `~/.warpgate-mcp/logs`） |
+| `WPG_SSH_STRICT_HOST_KEY` | SSH Host Key 校验开关 (`true`/`false`) |
 | `WPG_TLS_CERT_PATH` | TLS 证书路径（可选，启用 HTTPS） |
 | `WPG_TLS_KEY_PATH` | TLS 私钥路径（可选，启用 HTTPS） |
 
@@ -173,7 +176,7 @@ pm2 start ecosystem.config.cjs
                                      │  ├─ metrics-db.ts— 自有审计/指标 DB  │
                                      │  ├─ stats.ts     — 调用计数器        │
                                      │  ├─ logger.ts    — Pino 双目标日志   │
-                                     │  └─ tools/       — 19 个 MCP 工具    │
+                                     │  └─ tools/       — 20 个 MCP 工具    │
                                      └──────────┬──────────────────────────┘
                                                 │
                                      ┌──────────▼──────────┐

@@ -84,6 +84,10 @@ export function exec(
     const startTime = Date.now();
     let timedOut = false;
 
+    const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10MB
+    let outputSize = 0;
+    let outputTruncated = false;
+
     const timer = setTimeout(() => {
       timedOut = true;
       conn.end();
@@ -100,7 +104,22 @@ export function exec(
         }
 
         stream.on('data', (data: Buffer) => {
-          stdout += data.toString();
+          if (outputSize >= MAX_OUTPUT_BYTES) {
+            if (!outputTruncated) {
+              outputTruncated = true;
+              stdout += '\n--- TRUNCATED: output exceeds 10MB ---\n';
+            }
+            return;
+          }
+          const chunk = data.toString();
+          const remaining = MAX_OUTPUT_BYTES - outputSize;
+          if (chunk.length > remaining) {
+            stdout += chunk.slice(0, remaining);
+            outputSize = MAX_OUTPUT_BYTES;
+          } else {
+            stdout += chunk;
+            outputSize += chunk.length;
+          }
         });
 
         if (stream.stderr) {
@@ -125,6 +144,7 @@ export function exec(
 
     conn.on('error', (err) => {
       clearTimeout(timer);
+      conn.end();
       reject(new SshConnectionError(err.message, target.host, target.port));
     });
 
@@ -189,6 +209,7 @@ function withSftp(
     });
 
     conn.on('error', (err) => {
+      conn.end();
       reject(new SshConnectionError(err.message, target.host, target.port));
     });
 

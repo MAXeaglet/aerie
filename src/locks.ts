@@ -10,11 +10,13 @@ export async function withEditLock(
 ): Promise<void> {
   // 等待当前队列尾
   const prev = editQueues.get(remotePath) ?? Promise.resolve();
-  // 新操作挂到队列尾，即使失败也要 catch 防止死锁
-  const next = prev.then(fn).catch(() => {});
+  // 新操作挂到队列尾
+  // 保留原始 promise 返回给调用方，让调用方能感知错误
+  // 链上 catch 防止锁队列断裂（一个操作失败不阻塞后续操作）
+  const current = prev.then(fn);
+  const next = current.catch(() => {}); // 静默吞掉，让队列继续走
   editQueues.set(remotePath, next);
-  // 不 await next 在这里 — 由调用方 await
-  return next;
+  return current; // 返回原始 promise，让调用方 await 到真实的 resolve/reject
 }
 
 /** 清理某个路径的锁（可选，用于测试或紧急解锁） */

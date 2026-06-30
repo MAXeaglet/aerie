@@ -5,14 +5,19 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import { readFileSync } from 'node:fs';
+import { resolve, join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { loadConfig } from './config.js';
+import type { Config } from './config.js';
 import { createLogger } from './logger.js';
+import type { Logger } from 'pino';
 import { openWarpgateDb, openWarpgateDbWritable, validateSchema } from './db.js';
 import { initMetricsDb, insertAuditLog } from './metrics-db.js';
-import { authMiddleware, setAuthConfig, validateMcpToken, isSensitiveTool, formatAuditEntry } from './auth.js';
+import { authMiddleware, setAuthConfig, validateMcpToken, isSensitiveTool, formatAuditEntry, loginHandler, logoutHandler } from './auth.js';
 import { createStats } from './stats.js';
+import type { Stats } from './stats.js';
 import { exec as sshExec } from './ssh.js';
 import { getTargetByName } from './db.js';
 import { withEditLock } from './locks.js';
@@ -40,16 +45,30 @@ import {
   removeTargetTool, handleRemoveTarget,
   getTargetTool, handleGetTarget,
 } from './tools/target-mgmt.js';
+import { createDashboardRouter } from './dashboard.js';
 
 // ─── 初始化（10 步）─────────────────────────────────────
 
 // 1. loadConfig
-const config = loadConfig();
-setAuthConfig(config);
+let config: Config;
+let logger: Logger;
+try {
+  config = loadConfig();
+  setAuthConfig(config);
+} catch (err) {
+  // 配置文件损坏时输出到 stderr 后退出
+  process.stderr.write(`FATAL: Failed to load config: ${(err as Error).message}\n`);
+  process.exit(1);
+}
 
 // 2. createLogger
-const logger = createLogger(config);
-logger.info({ event: 'server.start', phase: 'config_loaded' });
+try {
+  logger = createLogger(config);
+  logger.info({ event: 'server.start', phase: 'config_loaded' });
+} catch (err) {
+  process.stderr.write(`FATAL: Failed to create logger: ${(err as Error).message}\n`);
+  process.exit(1);
+}
 
 // 3. createStats (在注册 handler 之前)
 const stats = createStats();
@@ -88,7 +107,7 @@ try {
 
 // 6. MCP Server 实例
 const server = new Server(
-  { name: 'aerie', version: '0.1.0' },
+  { name: 'aerie', version: '1.0.0' },
   { capabilities: { tools: {} } },
 );
 
@@ -124,9 +143,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   stats.incCalls();
 
   try {
-    // I-01/RBAC: sensitive 工具记录审计标记
+    // I-01/RBAC: sensitive 工具检查
     if (isSensitiveTool(name)) {
-      logger.info({ event: 'sensitive_tool.call', tool: name, args: formatAuditEntry(name, args || {}) });
+      const hasConfirm = (args as Record<string, unknown>)?.confirm === true;
+      logger.warn({
+        event: 'sensitive_tool.call', tool: name,
+        args: formatAuditEntry(name, args || {}),
+        confirmed: hasConfirm,
+      });
+      if (!hasConfirm) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            error: `Sensitive tool "${name}" requires confirm=true parameter. This is a destructive operation.`,
+          }) }],
+          isError: true,
+        };
+      }
     }
 
     let result;
@@ -207,8 +239,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// 8. Express app + auth middleware
+// 8. Express app + auth + dashboard
 const app = express();
+const __fname = fileURLToPath(import.meta.url);
+const __dname = dirname(__fname);
+const dashboardDir = __dname.includes('src')
+  ? join(__dname, 'dashboard')
+  : join(__dname, '..', 'src', 'dashboard');
+
+// Body parser (for dashboard login POST)
+app.use(express.json());
+
+// Dashboard static files (before auth — /dashboard/* and / are whitelisted in auth middleware)
+app.use('/dashboard', express.static(dashboardDir));
+app.get('/', (_req, res) => {
+  res.sendFile(dashboardDir + '/index.html');
+});
+
+// Auth middleware (whitelisted paths pass through, all others need Bearer or session)
+app.use(authMiddleware(config));
+
+// Dashboard auth routes (whitelisted)
+app.post('/api/auth/login', loginHandler);
+app.post('/api/auth/logout', logoutHandler);
+
+// Dashboard REST API router (protected by auth middleware)
+app.use(createDashboardRouter({
+  warpgateDb,
+  warpgateWriteDb,
+  metricsDb,
+  config,
+  stats,
+  sshExec,
+}));
 
 // 9. HTTP/SSE 传输
 let transport: SSEServerTransport | undefined;
@@ -234,36 +297,49 @@ app.post('/message', async (req, res) => {
 
 // 10. 启动 HTTP/HTTPS server
 function startServer() {
+  const handleListen = (protocol: string) => {
+    logger.info({
+      event: 'server.start', version: '1.0.0',
+      nodeVersion: process.version,
+      protocol,
+      listenAddress: `${config.listenHost}:${config.listenPort}`,
+      warpgateDb: config.warpgateDbPath,
+      metricsDb: config.metricsDbPath,
+      uptime: 0,
+    });
+    logger.info(`aerie v1.0.0 listening on ${config.listenHost}:${config.listenPort}${protocol === 'https' ? ' (HTTPS)' : ''}`);
+  };
+
+  const handleError = (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.fatal({ event: 'server.error', error: `Port ${config.listenPort} already in use` });
+    } else if (err.code === 'EACCES') {
+      logger.fatal({ event: 'server.error', error: `Permission denied for port ${config.listenPort}` });
+    } else {
+      logger.fatal({ event: 'server.error', error: err.message });
+    }
+    process.exit(1);
+  };
+
   if (config.tlsCertPath && config.tlsKeyPath) {
     const tlsOptions = {
       cert: readFileSync(config.tlsCertPath),
       key: readFileSync(config.tlsKeyPath),
     };
-    createHttpsServer(tlsOptions, app).listen(config.listenPort, config.listenHost, () => {
-      logger.info({
-        event: 'server.start', version: '0.1.0',
-        nodeVersion: process.version,
-        protocol: 'https',
-        listenAddress: `${config.listenHost}:${config.listenPort}`,
-        warpgateDb: config.warpgateDbPath,
-        metricsDb: config.metricsDbPath,
-        uptime: 0,
-      });
-      logger.info(`aerie v0.1.0 listening on ${config.listenHost}:${config.listenPort} (HTTPS)`);
-    });
+    const server = createHttpsServer(tlsOptions, app);
+    server.on('error', handleError);
+    server.listen(config.listenPort, config.listenHost, () => handleListen('https'));
   } else {
-    createHttpServer(app).listen(config.listenPort, config.listenHost, () => {
-      logger.info({
-        event: 'server.start', version: '0.1.0',
-        nodeVersion: process.version,
-        protocol: 'http',
-        listenAddress: `${config.listenHost}:${config.listenPort}`,
-        warpgateDb: config.warpgateDbPath,
-        metricsDb: config.metricsDbPath,
-        uptime: 0,
-      });
-      logger.info(`aerie v0.1.0 listening on ${config.listenHost}:${config.listenPort}`);
-    });
+    const server = createHttpServer(app);
+    server.on('error', handleError);
+    server.listen(config.listenPort, config.listenHost, () => handleListen('http'));
   }
 }
+
+// 全局错误中间件（最后注册，捕获之前所有路由的异常）
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  logger?.error?.({ event: 'express.error', error: err.message });
+  res.status(500).json({ error: 'Internal server error' });
+});
+
 startServer();

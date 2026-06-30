@@ -57,35 +57,47 @@ export async function handleStats(
       return acc;
     }, sections);
 
+  function safeParseFloat(val: string | undefined, defaultVal: number): number {
+    if (val === undefined || val === '') return defaultVal;
+    const n = parseFloat(val);
+    return Number.isFinite(n) ? n : defaultVal;
+  }
+
+  function safeParseInt(val: string | undefined, defaultVal: number): number {
+    if (val === undefined || val === '') return defaultVal;
+    const n = parseInt(val, 10);
+    return Number.isFinite(n) ? n : defaultVal;
+  }
+
   // Parse CPU — top -bn1 line: "%Cpu(s):  2.3 us,  1.1 sy, ..."
   const cpuMatch = sections.CPU?.match(/([\d.]+)%?us/);
-  const cpuPercent = cpuMatch ? parseFloat(cpuMatch[1]) : 0;
+  const cpuPercent = cpuMatch ? safeParseFloat(cpuMatch[1], 0) : 0;
 
   // Parse MEM — free -b output: "Mem:          total     used     free   shared  buff/cache  available"
   const memParts = sections.MEM?.split(/\s+/).filter(Boolean) || [];
-  const memTotal = parseFloat(memParts[1] || '0');
-  const memUsed = parseFloat(memParts[2] || '0');
+  const memTotal = safeParseFloat(memParts[1], 0);
+  const memUsed = safeParseFloat(memParts[2], 0);
   const memPercent = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
 
   // Parse DISK — df -B1 output: "filesystem  1B-blocks   used  available  use%  mounted"
   const diskParts = sections.DISK?.split(/\s+/).filter(Boolean) || [];
-  const diskTotal = parseFloat(diskParts[1] || '0');
-  const diskUsed = parseFloat(diskParts[2] || '0');
+  const diskTotal = safeParseFloat(diskParts[1], 0);
+  const diskUsed = safeParseFloat(diskParts[2], 0);
   const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
 
   // Parse NET — /proc/net/dev line: "eth0:  bytes packets errs drop ..."
   const netMatch = sections.NET?.match(/:\s*(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)/);
-  const netRx = netMatch ? parseInt(netMatch[1], 10) : 0;
-  const netTx = netMatch ? parseInt(netMatch[2], 10) : 0;
+  const netRx = netMatch ? safeParseInt(netMatch[1], 0) : 0;
+  const netTx = netMatch ? safeParseInt(netMatch[2], 0) : 0;
 
   // Parse LOAD — /proc/loadavg: "1.23 0.89 0.67 ..."
   const loadParts = sections.LOAD?.split(/\s+/) || [];
-  const load1m = parseFloat(loadParts[0] || '0');
-  const load5m = parseFloat(loadParts[1] || '0');
-  const load15m = parseFloat(loadParts[2] || '0');
+  const load1m = safeParseFloat(loadParts[0], 0);
+  const load5m = safeParseFloat(loadParts[1], 0);
+  const load15m = safeParseFloat(loadParts[2], 0);
 
   // Parse UPTIME — /proc/uptime: "12345.67  ..."
-  const uptimeSec = parseFloat(sections.UPTIME?.split(/\s+/)[0] || '0');
+  const uptimeSec = safeParseFloat(sections.UPTIME?.split(/\s+/)[0], 0);
 
   const snapshot: StatsSnapshot = {
     targetName: args.target,
