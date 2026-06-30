@@ -83,8 +83,7 @@ npx tsc --noEmit        # 类型检查
 
 ## NOTES
 - 监听 `127.0.0.1:3100`（仅本地），需 SSH 隧道或 OpenResty 反代暴露公网
-- 部署地: `/opt/aerie/` on `101.47.19.193`，PM2 管理
-- Warpgate DB 路径: `/opt/warpgate/data/db/db.sqlite3`
+- 部署路径: `/opt/aerie/`，PM2 管理
 - 配置文件: `~/.warpgate-mcp/config.json` (首次自动生成)
 - PM2 日志 `~` 不展开 — 注意路径
 - 包版本 `1.0.0` 但 server 版本 `0.1.0` — 未统一
